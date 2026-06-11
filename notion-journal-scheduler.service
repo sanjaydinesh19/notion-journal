@@ -1,0 +1,13 @@
+[Unit]
+Description=Notion Journal Scheduler (weekly/monthly auto-creation)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/sanjay/Projects/Notion Journal
+ExecStart=/home/sanjay/Projects/Notion Journal/.venv/bin/python journal.py schedule
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
