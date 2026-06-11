@@ -2,6 +2,7 @@ import json
 import subprocess
 import tempfile
 import threading
+import time
 import wave
 from pathlib import Path
 from typing import Optional
@@ -31,6 +32,19 @@ def _pw_dump() -> list:
         return []
 
 
+def _pw_dump_retry(attempts: int = 5, delay: float = 1.0) -> list:
+    """Return pw-dump, retrying if BT device not yet visible (e.g. just reconnected)."""
+    dump = _pw_dump()
+    if _find_bt_device(dump) is not None:
+        return dump
+    for _ in range(attempts):
+        time.sleep(delay)
+        dump = _pw_dump()
+        if _find_bt_device(dump) is not None:
+            return dump
+    return dump
+
+
 def _find_bt_device(dump: list) -> Optional[dict]:
     """Return the PipeWire Device object for the connected BT headset, or None."""
     for obj in dump:
@@ -53,7 +67,7 @@ def _get_bt_profile_index(device: dict, name_fragment: str) -> Optional[int]:
 def _set_bt_profile(device_id: int, profile_index: int):
     subprocess.run(
         ["pw-cli", "set-param", str(device_id), "Profile", f"{{ index: {profile_index} }}"],
-        stderr=subprocess.DEVNULL, timeout=5,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
     )
 
 
@@ -89,7 +103,8 @@ def record_audio(max_duration: int = 300) -> Path:
     records, then restores A2DP.
     Returns path to a 16kHz mono WAV file ready for Whisper.
     """
-    dump = _pw_dump()
+    # After a BT reconnect the device may not be in pw-dump immediately; retry.
+    dump = _pw_dump_retry()
     bt_device = _find_bt_device(dump)
     a2dp_index = None
     source_target: Optional[str] = None
@@ -111,15 +126,23 @@ def record_audio(max_duration: int = 300) -> Path:
                          or _get_bt_profile_index(bt_device, "headset-head-unit-cvsd")
                          or _get_bt_profile_index(bt_device, "headset-head-unit"))
             if hfp_index is not None:
-                console.print(f"[dim]Switching headset to HFP profile for mic access...[/]")
+                console.print("[dim]Switching headset to HFP profile for mic access...[/]")
                 _set_bt_profile(device_id, hfp_index)
-                import time; time.sleep(1.5)  # give PipeWire time to reconnect
 
-        # Refresh dump to find the new source node
-        dump = _pw_dump()
-        src_id = _get_bt_source_id(dump)
+        # Poll for the Audio/Source node — it can take a few seconds after reconnect.
+        src_id = None
+        for attempt in range(6):
+            time.sleep(1.0)
+            dump = _pw_dump()
+            src_id = _get_bt_source_id(dump)
+            if src_id:
+                break
+            if attempt == 0:
+                console.print("[dim]Waiting for BT mic to come online...[/]")
         if src_id:
             source_target = str(src_id)
+        else:
+            console.print("[yellow]BT mic source not found after waiting; falling back to default mic.[/]")
 
     # Build pw-record command
     tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
@@ -150,10 +173,8 @@ def record_audio(max_duration: int = 300) -> Path:
             proc.terminate()
         proc.wait()
 
-    # Restore A2DP if we switched away
-    if bt_device and a2dp_index is not None and "headset" not in (
-        bt_device.get("info", {}).get("params", {}).get("Profile", [{}])[0].get("name", "")
-    ):
+    # Restore A2DP after recording
+    if bt_device and a2dp_index is not None:
         console.print("[dim]Restoring headset to A2DP...[/]")
         _set_bt_profile(bt_device["id"], a2dp_index)
 
