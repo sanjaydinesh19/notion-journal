@@ -10,6 +10,9 @@ Voice-to-Notion Journal
 
 from __future__ import annotations
 
+import os
+import subprocess
+import tempfile
 from datetime import date
 
 import click
@@ -20,6 +23,20 @@ from src import config
 from src.notion_api import NotionJournal
 
 console = Console()
+
+
+def _edit_in_terminal(text: str) -> str:
+    """Open text in $EDITOR (fallback: nano) and return the edited version."""
+    editor = os.environ.get("EDITOR", "nano")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        f.write(text)
+        tmp_path = f.name
+    try:
+        subprocess.call([editor, tmp_path])
+        with open(tmp_path) as f:
+            return f.read().strip()
+    finally:
+        os.unlink(tmp_path)
 
 
 def _journal() -> NotionJournal:
@@ -62,6 +79,7 @@ def record(duration: int, entry_date: str | None):
         console.print(
             "\n  [[bold green]Enter[/]] Save    "
             "[[bold yellow]R[/]] Re-record    "
+            "[[bold cyan]E[/]] Edit    "
             "[[bold red]N[/]] Cancel\n"
         )
         choice = input("  > ").strip().lower()
@@ -71,6 +89,9 @@ def record(duration: int, entry_date: str | None):
             return
         if choice == "r":
             continue
+        if choice == "e":
+            transcript = _edit_in_terminal(transcript)
+            console.print(Panel(transcript, title="[bold]Edited Transcript[/]", border_style="cyan"))
 
         # Format and save
         console.print("[dim]Formatting with AI...[/]")
