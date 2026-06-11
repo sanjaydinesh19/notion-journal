@@ -82,7 +82,24 @@ def record(duration: int, entry_date: str | None):
             border_style="green",
         ))
 
-        _journal().add_daily_entry(bullets, parsed_date)
+        result = _journal().add_daily_entry(bullets, parsed_date)
+
+        # GitHub backup
+        gh_token = config.get("GITHUB_TOKEN")
+        gh_repo = config.get("GITHUB_JOURNAL_REPO")
+        if gh_token and gh_repo:
+            try:
+                from src.github_backup import JournalBackup
+                backup = JournalBackup(gh_token, gh_repo)
+                backup.commit(
+                    entry_date=result["entry_date"],
+                    daily_md=result["daily_md"],
+                    weekly_md=result.get("weekly_md"),
+                    monthly_md=result.get("monthly_md"),
+                )
+            except Exception as e:
+                console.print(f"[yellow]GitHub backup failed:[/] {e}")
+
         return
 
 
